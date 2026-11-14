@@ -32,7 +32,8 @@
       "sse": false
     },
     "_meta": {
-      "authStatus": {}
+      "authStatus": {},
+      "sh.rexa/sessionRewind": {}
     }
   },
   "authMethods": [

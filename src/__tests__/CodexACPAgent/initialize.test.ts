@@ -65,6 +65,7 @@ describe('CodexACPAgent - initialize', () => {
                 },
                 _meta: {
                     authStatus: {},
+                    "sh.rexa/sessionRewind": {},
                 },
             },
             authMethods: getCodexAuthMethods(),

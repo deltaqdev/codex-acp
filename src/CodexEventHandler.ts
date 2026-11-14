@@ -1336,6 +1336,7 @@ export class CodexEventHandler {
         this.sessionState.totalTokenUsage = toTokenCount(params.tokenUsage.total);
         this.sessionState.promptTokenUsage?.observe(this.sessionState.totalTokenUsage, this.sessionState.lastTokenUsage);
         this.sessionState.modelContextWindow = params.tokenUsage.modelContextWindow;
+        (this.sessionState.turnTokenUsage ??= new Map()).set(params.turnId, params.tokenUsage);
     }
 
     private createUsageUpdate(params: ThreadTokenUsageUpdatedNotification): UpdateSessionEvent | null {

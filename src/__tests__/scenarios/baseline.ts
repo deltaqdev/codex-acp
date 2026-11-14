@@ -1,4 +1,5 @@
 import {canonical, type RecordedMessage} from "./scenario-harness";
+import {SESSION_REWIND_CAPABILITY_KEY} from "../../SessionRewind";
 
 /**
  * The comparison of the messages for a client that is not AIR with the messages of the adapter before the AIR extensions.
@@ -141,7 +142,7 @@ const MCP_COMMAND = {
 /**
  * The feature changes of the compatibility rule that change the messages of the scenarios:
  * the `/mcp` command has a new description and an input hint.
- * Initialize also advertises text-only append system prompts and client-set titles.
+ * Initialize also advertises text-only append system prompts, client-set titles and Rexa's session rewind.
  * Only a command that equals the baseline `/mcp` command changes.
  */
 export function withFeatureChanges(messages: RecordedMessage[]): RecordedMessage[] {
@@ -154,6 +155,7 @@ export function withFeatureChanges(messages: RecordedMessage[]): RecordedMessage
             if (session) {
                 return {...message, params: {...params, agentCapabilities: {
                     ...capabilities, sessionCapabilities: {...session, systemPrompt: {}, title: {}},
+                    _meta: {...capabilities?.["_meta"] as Json | undefined, [SESSION_REWIND_CAPABILITY_KEY]: {}},
                 }}};
             }
         }

@@ -5,7 +5,7 @@ import type {SessionConfig} from "./CodexAcpClient";
 import type {CodexAppServerClient} from "./CodexAppServerClient";
 import type {ModeKind} from "./app-server/ModeKind";
 import type {ServiceTier} from "./app-server/ServiceTier";
-import type {Model} from "./app-server/v2";
+import type {Model, ThreadItem, Turn} from "./app-server/v2";
 import type {SessionMetadata} from "./SessionMetadata";
 import type {AcpMcpServer, WithAcpMcpServers} from "./McpServerConfig";
 import type {SessionInstructions} from "./ClientSystemPrompt";
@@ -87,7 +87,7 @@ async function resolveForkTurnId(
     const history = await codexClient.threadReadWithHistory(request.sessionId);
     const candidateIds = airForkMessageIdCandidates(forkPoint.messageId);
     const itemTurnId = candidateIds
-        .map(candidateId => history.thread.turns.find(turn => turn.items.some(item => item.id === candidateId))?.id)
+        .map(candidateId => history.thread.turns[findTurnIndex(history.thread.turns, item => item.id === candidateId)]?.id)
         .find(turnId => turnId !== undefined);
     if (itemTurnId) return itemTurnId;
 
@@ -104,6 +104,11 @@ async function resolveForkTurnId(
         {messageId: forkPoint.messageId},
         `Fork point message ${forkPoint.messageId} was not found in session ${request.sessionId}`,
     );
+}
+
+/** The index of the first turn holding an item that `matches`, or -1. Shared with `SessionRewind.ts`. */
+export function findTurnIndex(turns: Turn[], matches: (item: ThreadItem) => boolean): number {
+    return turns.findIndex(turn => turn.items.some(matches));
 }
 
 type AirForkPoint = {

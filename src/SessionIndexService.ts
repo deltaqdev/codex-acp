@@ -47,6 +47,7 @@ import {SessionIndexTitles} from "./SessionIndexTitles";
 import {canonicalCwds, CodexWorktreeMarks, isUncPath, linkedWorktreeCwds} from "./SessionIndexWorktrees";
 import {SessionForkOrigins} from "./SessionForkOrigins";
 import {SessionListSubscriptions, type SessionListSubscriptionTimings, type ThreadEntry} from "./SessionListSubscriptions";
+import {isRewindReloadStatus} from "./SessionRewind";
 import {SessionWriteQueue} from "./SessionWriteQueue";
 import type {SerializeTitleWrite} from "./TitleGenerator";
 import {readSessionBatchMetadata} from "./SessionBatchGet";
@@ -138,6 +139,7 @@ export class SessionIndexService {
         client.appServerClient.onClientTransportEvent((event) => {
             if (event.eventType !== "notification" || this.host.client() !== client) return;
             const notification = event as unknown as ServerNotification;
+            if (isRewindReloadStatus(threadId => this.host.session(threadId), notification)) return;
             this.activity.observe(notification);
             // A thread deleted or unloaded here has no state to refresh after a restart.
             if (notification.method === "thread/deleted" || notification.method === "thread/closed"

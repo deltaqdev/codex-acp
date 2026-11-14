@@ -307,6 +307,7 @@ export class SessionListSubscriptions {
             case "thread/archived":
             case "thread/unarchived":
             case "thread/closed":
+            case "thread/reverted":
             case "turn/started":
             case "turn/completed":
                 if (!this.ignoredThreads.has(notification.params.threadId)) this.threadChanged(notification.params.threadId);

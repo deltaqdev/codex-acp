@@ -78,6 +78,7 @@ import type {
     ThreadGoal,
     ThreadItem,
     ThreadItemEntry,
+    ThreadTokenUsage,
     Turn,
     TurnStatus,
     UserInput
@@ -189,6 +190,15 @@ import {SubagentInteractionHandlers} from "./subagents/SubagentInteractionHandle
 import type {SubagentEventRouter} from "./subagents/SubagentEventRouter";
 import {subagentConfigurationOptions, type ObservedSubagentConfiguration} from "./subagents/SubagentConfiguration";
 import {listCodexHooks, trustCodexHooks, type CodexHookIdentity} from "./CodexHookTrust";
+import {
+    isRewindReloadNotification,
+    restoreContextUsage,
+    rewindSession,
+    SESSION_REWIND_CAPABILITY_KEY,
+    type SessionRewindRequest,
+    type SessionRewindResponse,
+    turnRunningError,
+} from "./SessionRewind";
 import type {HooksListEntry} from "./app-server/v2/HooksListEntry";
 import {
     accountFromUpdated,
@@ -305,6 +315,10 @@ export interface SessionState extends SessionIndexTitleState {
      * whatever is still open here for a turn the dead app-server process never finished.
      */
     openToolCalls: CodexSessionToolCalls;
+    /** A rewind reloads the thread: its own notifications meanwhile are not the client's, see `SessionRewind.ts`. */
+    reloadingForRewind?: boolean;
+    /** The context usage Codex reported per turn, which a rewind restores for the turn it keeps. */
+    turnTokenUsage?: Map<string, ThreadTokenUsage>;
 }
 
 export type SessionFailureCategory =
@@ -859,6 +873,7 @@ export class CodexAcpServer {
                     // Presence means "this agent pushes `_auth/status_update`". It
                     // never carries a payload, and the client never asks for one.
                     [AUTH_STATUS_META_KEY]: authStatusCapability(),
+                    [SESSION_REWIND_CAPABILITY_KEY]: {},
                 },
             },
             authMethods: getCodexAuthMethods(_params.clientCapabilities),
@@ -914,6 +929,9 @@ export class CodexAcpServer {
                     fork: {},
                     title: {},
                     systemPrompt: {},
+                },
+                _meta: {
+                    [SESSION_REWIND_CAPABILITY_KEY]: {},
                 },
             },
             authMethods: getCodexAuthMethodsV2(clientCapabilities),
@@ -982,6 +1000,47 @@ export class CodexAcpServer {
         const appServer = this.ensureAppServer();
         if (appServer) await appServer;
         return {trusted: await this.runWithProcessCheck(() => trustCodexHooks(this.codexAcpClient.appServerClient, cwd, hooks))};
+    }
+
+    /** `_sh.rexa/session/rewind`, see `SessionRewind.ts`. */
+    async rewindSession(params: SessionRewindRequest): Promise<SessionRewindResponse> {
+        const sessionState = this.getSessionState(params.sessionId);
+        if (this.providerUpdate !== null) await this.waitForProviderUpdate();
+        const sessionReady = this.ensureSessionReady(sessionState);
+        if (sessionReady) await sessionReady;
+        const sessionId = sessionState.sessionId;
+        const appServerClient = this.codexAcpClient.appServerClient;
+        if (this.hasSessionWorkInProgress(sessionId) || appServerClient.runningTurnId(sessionId) !== undefined) {
+            throw turnRunningError(sessionId);
+        }
+        // A prompt sent during the revert starts its turn after it, on the reverted thread.
+        const reservation = this.acquireTurnStartReservation(sessionId);
+        try {
+            return await this.runWithProcessCheck(() => rewindSession(params, {
+                codexClient: appServerClient,
+                protocolVersion: this.protocolVersion,
+                whileReloading: async (revert) => {
+                    sessionState.reloadingForRewind = true;
+                    try {
+                        await revert();
+                    } finally {
+                        // The reload's notifications precede the response: the queue still sees them inside the window.
+                        await this.codexAcpClient.enqueueSessionTransition(sessionId, () => {
+                            sessionState.reloadingForRewind = false;
+                        });
+                    }
+                },
+                reverted: async (turns) => {
+                    const usage = restoreContextUsage(sessionState, turns);
+                    if (usage) await new ACPSessionConnection(this.connection, sessionId).update(usage);
+                    // The suggestion and background terminals belong to the discarded turns and runtime.
+                    await sessionState.promptSuggestions?.clear();
+                    await sessionState.asyncTasks.reconcile();
+                },
+            }));
+        } finally {
+            reservation.release();
+        }
     }
 
     async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1138,8 +1197,7 @@ export class CodexAcpServer {
         this.assertInstructionsReady(request.sessionId);
         if (!changesSystemPrompt(request, this.sessions.get(request.sessionId)?.instructions)) return action();
         const sessionId = request.sessionId;
-        if (this.isSessionBusy(sessionId) || this.activePrompts.has(sessionId)
-            || this.pendingTurnStarts.has(sessionId) || this.turnStartQueueTail.get(sessionId)?.settled === false) {
+        if (this.hasSessionWorkInProgress(sessionId)) {
             throw RequestError.invalidParams(undefined, "Cannot change systemPrompt while session work is in progress; retry when idle");
         }
         this.instructionUpdates.add(sessionId);
@@ -1148,6 +1206,12 @@ export class CodexAcpServer {
         } finally {
             this.instructionUpdates.delete(sessionId);
         }
+    }
+
+    /** A turn runs, or a prompt waits to start one. */
+    private hasSessionWorkInProgress(sessionId: string): boolean {
+        return this.isSessionBusy(sessionId) || this.activePrompts.has(sessionId)
+            || this.pendingTurnStarts.has(sessionId) || this.turnStartQueueTail.get(sessionId)?.settled === false;
     }
 
     private restoreExistingSessionTracker(sessionId: string): void {
@@ -1668,7 +1732,7 @@ export class CodexAcpServer {
             sessionId,
             async (event) => {
                 const sessionState = await ready;
-                if (!sessionState) return;
+                if (!sessionState || isRewindReloadNotification(sessionState, event)) return;
                 if (!baselineEventHandler) {
                     baselineEventHandler = new CodexEventHandler(
                         this.connection,
@@ -5034,6 +5098,7 @@ export class CodexAcpServer {
             };
             await promptClient.subscribeToSessionEvents(params.sessionId,
                 async (event) => {
+                    if (isRewindReloadNotification(sessionState, event)) return;
                     // Tracks turns this prompt doesn't own too (a `/goal` continuation after this
                     // prompt's own turn already went idle): the same subscription keeps receiving
                     // notifications for as long as no later prompt replaces it.

@@ -86,6 +86,8 @@ import type {
     ThreadSetNameResponse,
     ThreadUnsubscribeParams,
     ThreadUnsubscribeResponse,
+    ThreadRevertParams,
+    ThreadRevertResponse,
     ToolRequestUserInputParams,
     ToolRequestUserInputResponse,
     TurnCompletedNotification,
@@ -831,6 +833,10 @@ export class CodexAppServerClient {
         return await this.sendRequest({ method: "thread/unsubscribe", params: params });
     }
 
+    async threadRevert(params: ThreadRevertParams): Promise<ThreadRevertResponse> {
+        return await this.sendRequest({ method: "thread/revert", params: params });
+    }
+
     async threadCompactStart(params: ThreadCompactStartParams): Promise<ThreadCompactStartResponse> {
         return await this.sendRequest({ method: "thread/compact/start", params: params });
     }
@@ -1355,13 +1361,14 @@ export class CodexAppServerClient {
     }
 }
 
-/** The thread whose rollout `request` reads: a resume, a fork (of the source thread) or a history read. */
+/** The thread whose rollout `request` reads: a resume, a fork (of the source thread), a revert or a history read. */
 function threadLoadOf(request: CodexRequest): string | null {
     const params = (request as {params?: unknown}).params as {threadId?: unknown, includeTurns?: unknown} | undefined;
     if (typeof params?.threadId !== "string") return null;
     switch (request.method) {
         case "thread/resume":
         case "thread/fork":
+        case "thread/revert":
         case "thread/turns/list":
         case "thread/items/list":
             return params.threadId;
